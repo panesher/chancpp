@@ -341,3 +341,52 @@ BOOST_AUTO_TEST_CASE(chan_operator_bool_semantics) {
   BOOST_TEST(!z.has_value());
   BOOST_TEST(!static_cast<bool>(c));
 }
+
+BOOST_AUTO_TEST_CASE(operator_ll_gg) {
+  chan::Chan<int> c(2);
+
+  c << 1;
+  std::optional<int> value;
+  value << c;
+  BOOST_TEST(value.value() == 1);
+}
+
+BOOST_AUTO_TEST_CASE(operator_ll_gg_empty_chan) {
+  chan::EmptyChan<int> c;
+
+  std::thread reader([&c] {
+    std::optional<int> value;
+    value << c;
+    BOOST_TEST(value.value() == 1);
+  });
+
+  c << 1;
+  c.close();
+  reader.join();
+}
+
+BOOST_AUTO_TEST_CASE(operator_passing) {
+  chan::EmptyChan<int> c1;
+  chan::Chan<int> c2(2);
+  std::atomic<int> equals;
+
+  std::thread transfer([&c1, &c2, &equals] {
+    int value;
+    c2 << (value << c1);
+    equals += (value == 1);
+    c2.close();
+  });
+
+  std::thread reader([&c2, &equals] {
+    std::optional<int> v;
+    v << c2;
+    equals += (v.value() == 1);
+  });
+
+  c1 << 1;
+  c1.close();
+  transfer.join();
+  reader.join();
+
+  BOOST_TEST(equals == 2);
+}

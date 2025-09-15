@@ -10,6 +10,7 @@
 namespace chan {
 
 class WriteToClosedChannelException : public std::exception {};
+class ChannelReadNullIntoTException : public std::bad_optional_access {};
 
 template <typename T> class Queue {
 public:
@@ -43,12 +44,15 @@ template <typename T, typename Mutex = std::mutex,
 class Chan {
 public:
   Chan(size_t buffer_size) : queue_(buffer_size) {}
+  Chan(const Chan&) = delete;
+  Chan(Chan&&) = delete;
 
   template <typename... Args> void send(Args... args) {
     std::unique_lock lock(mu_);
     while (!closed_.load(std::memory_order_acquire)) {
       if (!queue_.full()) {
         queue_.push(std::forward<Args>(args)...);
+        lock.unlock();
         read_cv_.notify_one();
         return;
       }
@@ -61,19 +65,24 @@ public:
   std::optional<T> receive() {
     std::unique_lock lock(mu_);
     while (!closed_.load(std::memory_order_relaxed)) {
-      if (auto result = try_receive_unsafe()) {
+      if (auto result = try_receive_unsafe(lock)) {
         return result;
       }
 
       read_cv_.wait(lock);
     }
 
-    return try_receive_unsafe();
+    return try_receive_unsafe(lock);
   }
 
   std::optional<T> try_receive() {
     std::unique_lock lock(mu_);
-    return try_receive_unsafe();
+    return try_receive_unsafe(lock);
+  }
+
+  template <typename... Args> Chan &operator<<(Args... args) {
+    send(std::forward<Args>(args)...);
+    return *this;
   }
 
   void close() {
@@ -88,8 +97,9 @@ public:
   }
 
 private:
-  inline std::optional<T> try_receive_unsafe() {
+  inline std::optional<T> try_receive_unsafe(std::unique_lock<Mutex>& lock){
     if (auto result = queue_.try_pop()) {
+      lock.unlock();
       write_cv_.notify_one();
       return result;
     }
@@ -103,17 +113,35 @@ private:
   std::atomic<bool> closed_{false};
 };
 
+template <typename Out, typename T, typename Mutex,
+          typename ConditionalVariable, typename TQueue>
+inline Out &operator<<(Out &out,
+                       Chan<T, Mutex, ConditionalVariable, TQueue> &ch) {
+  if constexpr (std::is_same_v<std::remove_cvref_t<Out>, T>) {
+    auto result = ch.receive();
+    if (!result.has_value()) {
+      throw ChannelReadNullIntoTException{};
+    }
+    out = std::move(*result);
+  } else {
+    out = ch.receive();
+  }
+  return out;
+}
+
 template <typename T, typename Mutex = std::mutex,
           typename ConditionalVariable = std::condition_variable>
 class EmptyChan {
 public:
   EmptyChan() = default;
+  EmptyChan(const EmptyChan&) = delete;
+  EmptyChan(EmptyChan&&) = delete;
 
-  void send(T value) {
+  template <typename... Args> void send(Args... args) {
     std::unique_lock lock(mu_);
     while (!closed_.load(std::memory_order_acquire)) {
       if (!buffer_.has_value()) {
-        buffer_ = std::move(value);
+        buffer_.emplace(std::forward<Args>(args)...);
         auto own_ticket = ++ticket_;
         read_cv_.notify_one();
         while (!closed_.load(std::memory_order_acquire) &&
@@ -136,23 +164,28 @@ public:
   std::optional<T> receive() {
     std::unique_lock lock(mu_);
     while (!closed_.load(std::memory_order_relaxed)) {
-      if (auto result = try_receive_unsafe()) {
+      if (auto result = try_receive_unsafe(lock)) {
         return result;
       }
 
       read_cv_.wait(lock);
     }
 
-    return try_receive_unsafe();
+    return try_receive_unsafe(lock);
   }
 
   std::optional<T> try_receive() {
     std::unique_lock lock(mu_);
-    return try_receive_unsafe();
+    return try_receive_unsafe(lock);
+  }
+
+  template <typename... Args> EmptyChan &operator<<(Args... args) {
+    send(std::forward<Args>(args)...);
+    return *this;
   }
 
   void close() {
-    closed_.store(true, std::memory_order_relaxed);
+    closed_.store(true, std::memory_order_release);
     read_cv_.notify_all();
     write_cv_.notify_all();
     ticket_cv_.notify_all();
@@ -164,10 +197,11 @@ public:
   }
 
 private:
-  inline std::optional<T> try_receive_unsafe() {
+  inline std::optional<T> try_receive_unsafe(std::unique_lock<Mutex>& lock) {
     if (buffer_.has_value()) {
       auto result = std::move(buffer_);
       buffer_.reset();
+      lock.unlock();
       ticket_cv_.notify_one();
       write_cv_.notify_one();
       return result;
@@ -183,5 +217,20 @@ private:
   uint64_t ticket_{0};
   std::atomic<bool> closed_{false};
 };
+
+template <typename Out, typename T, typename Mutex,
+          typename ConditionalVariable>
+inline Out &operator<<(Out &out, EmptyChan<T, Mutex, ConditionalVariable> &ch) {
+  if constexpr (std::is_same_v<std::remove_cvref_t<Out>, T>) {
+    auto result = ch.receive();
+    if (!result.has_value()) {
+      throw ChannelReadNullIntoTException{};
+    }
+    out = std::move(*result);
+  } else {
+    out = ch.receive();
+  }
+  return out;
+}
 
 } // namespace chan
