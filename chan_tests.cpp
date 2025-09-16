@@ -9,11 +9,14 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include <boost/mpl/list.hpp>
 
 using namespace std::chrono_literals;
 
 // Helper to collect all remaining values from a channel until it is closed
 // (i.e., receive() returns std::nullopt).
+
+typedef boost::mpl::list<chan::BufferChannel<int>, chan::NoBufferChannel<int>, chan::Chan<int>> channel_types;
 
 template <typename Channel, typename T>
 static std::vector<T> drain_channel(Channel &ch) {
@@ -27,8 +30,8 @@ static std::vector<T> drain_channel(Channel &ch) {
   return out;
 }
 
-BOOST_AUTO_TEST_CASE(buffered_channel_fifo_single_producer_consumer) {
-  chan::Chan<int> c(3);
+BOOST_AUTO_TEST_CASE_TEMPLATE(param_channel_test, Channel, channel_types) {
+  Channel c(3);
 
   // Writer pushes a known ordered sequence, then closes.
   std::thread writer([&] {
@@ -56,15 +59,15 @@ BOOST_AUTO_TEST_CASE(buffered_channel_fifo_single_producer_consumer) {
   }
 }
 
-BOOST_AUTO_TEST_CASE(receive_on_closed_empty_returns_nullopt) {
-  chan::Chan<int> c(1);
+BOOST_AUTO_TEST_CASE_TEMPLATE(receive_on_closed_empty_returns_nullopt, Channel, channel_types) {
+  Channel c(1);
   c.close();
   auto v = c.receive();
   BOOST_TEST(!v.has_value());
 }
 
 BOOST_AUTO_TEST_CASE(empty_channel_rendezvous) {
-  chan::EmptyChan<int> ec;
+  chan::NoBufferChannel<int> ec;
 
   // Start a sender that posts after a short delay to ensure the receive blocks
   // until data arrives.
@@ -87,12 +90,12 @@ BOOST_AUTO_TEST_CASE(empty_channel_rendezvous) {
   sender.join();
 }
 
-BOOST_AUTO_TEST_CASE(multiple_writers_multiple_readers) {
+BOOST_AUTO_TEST_CASE_TEMPLATE(multiple_writers_multiple_readers, Channel, channel_types) {
   constexpr int writers_count = 5;
   constexpr int per_writer = 25;
   constexpr int readers_count = 6;
 
-  chan::Chan<int> c(3);
+  Channel c(3);
 
   // Launch writers producing distinct ranges.
   std::vector<std::thread> writers;
@@ -150,8 +153,8 @@ BOOST_AUTO_TEST_CASE(multiple_writers_multiple_readers) {
   }
 }
 
-BOOST_AUTO_TEST_CASE(chan_try_receive_empty_then_after_close) {
-  chan::Chan<int> c(2);
+BOOST_AUTO_TEST_CASE_TEMPLATE(chan_try_receive_empty_then_after_close, Channel, channel_types) {
+  Channel c(2);
 
   // Empty & open: try_receive should be nullopt and operator bool should be
   // true
@@ -167,20 +170,14 @@ BOOST_AUTO_TEST_CASE(chan_try_receive_empty_then_after_close) {
   BOOST_TEST(!static_cast<bool>(c));
 }
 
-BOOST_AUTO_TEST_CASE(chan_send_to_closed_throws) {
-  chan::Chan<int> c(1);
+BOOST_AUTO_TEST_CASE_TEMPLATE(chan_send_to_closed_throws, Channel, channel_types) {
+  Channel c(1);
   c.close();
   BOOST_CHECK_THROW(c.send(7), chan::WriteToClosedChannelException);
 }
 
-BOOST_AUTO_TEST_CASE(emptychan_send_to_closed_throws) {
-  chan::EmptyChan<int> ec;
-  ec.close();
-  BOOST_CHECK_THROW(ec.send(7), chan::WriteToClosedChannelException);
-}
-
 BOOST_AUTO_TEST_CASE(chan_close_idempotent_and_drain) {
-  chan::Chan<int> c(3);
+  chan::BufferChannel<int> c(3);
   c.send(1);
   c.send(2);
   c.close();
@@ -200,7 +197,7 @@ BOOST_AUTO_TEST_CASE(chan_close_idempotent_and_drain) {
 }
 
 BOOST_AUTO_TEST_CASE(chan_send_blocks_when_full_until_receive_frees_slot) {
-  chan::Chan<int> c(1); // capacity 1
+  chan::BufferChannel<int> c(1); // capacity 1
   std::atomic<bool> second_send_started{false};
   std::atomic<bool> second_send_completed{false};
 
@@ -238,7 +235,7 @@ BOOST_AUTO_TEST_CASE(chan_send_blocks_when_full_until_receive_frees_slot) {
 }
 
 BOOST_AUTO_TEST_CASE(emptychan_send_blocks_until_receive_then_unblocks) {
-  chan::EmptyChan<int> ec;
+  chan::NoBufferChannel<int> ec;
   std::atomic<bool> send_entered{false};
   std::atomic<bool> send_returned{false};
 
@@ -267,7 +264,7 @@ BOOST_AUTO_TEST_CASE(emptychan_send_blocks_until_receive_then_unblocks) {
 }
 
 BOOST_AUTO_TEST_CASE(emptychan_close_while_sender_waiting_causes_throw) {
-  chan::EmptyChan<int> ec;
+  chan::NoBufferChannel<int> ec;
   std::exception_ptr thrown;
 
   std::thread sender([&] {
@@ -295,7 +292,7 @@ BOOST_AUTO_TEST_CASE(emptychan_close_while_sender_waiting_causes_throw) {
 }
 
 BOOST_AUTO_TEST_CASE(emptychan_try_receive_semantics_open_and_closed) {
-  chan::EmptyChan<int> ec;
+  chan::NoBufferChannel<int> ec;
   // No value yet
   auto a = ec.try_receive();
   BOOST_TEST(!a.has_value());
@@ -321,7 +318,7 @@ BOOST_AUTO_TEST_CASE(emptychan_try_receive_semantics_open_and_closed) {
 }
 
 BOOST_AUTO_TEST_CASE(chan_operator_bool_semantics) {
-  chan::Chan<int> c(2);
+  chan::BufferChannel<int> c(2);
   // Open & empty -> true
   BOOST_TEST(static_cast<bool>(c));
 
@@ -343,7 +340,7 @@ BOOST_AUTO_TEST_CASE(chan_operator_bool_semantics) {
 }
 
 BOOST_AUTO_TEST_CASE(operator_ll_gg) {
-  chan::Chan<int> c(2);
+  chan::BufferChannel<int> c(2);
 
   c << 1;
   std::optional<int> value;
@@ -352,7 +349,7 @@ BOOST_AUTO_TEST_CASE(operator_ll_gg) {
 }
 
 BOOST_AUTO_TEST_CASE(operator_ll_gg_empty_chan) {
-  chan::EmptyChan<int> c;
+  chan::NoBufferChannel<int> c;
 
   std::thread reader([&c] {
     std::optional<int> value;
@@ -366,9 +363,10 @@ BOOST_AUTO_TEST_CASE(operator_ll_gg_empty_chan) {
 }
 
 BOOST_AUTO_TEST_CASE(operator_passing) {
-  chan::EmptyChan<int> c1;
-  chan::Chan<int> c2(2);
+  chan::NoBufferChannel<int> c1;
+  chan::BufferChannel<int> c2(2);
   std::atomic<int> equals;
+  chan::Chan<int> c(5);
 
   std::thread transfer([&c1, &c2, &equals] {
     int value;

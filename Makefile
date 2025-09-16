@@ -9,3 +9,13 @@ test_stress:
 	clang++ -std=c++20 -O3 -fsanitize=thread -pthread chan_stress_tests.cpp -o chan_stress_tests.out \
 		-I$(BOOST_DIR)/include -L$(BOOST_DIR)/lib
 	./chan_stress_tests.out
+
+test_select:
+	clang++ -std=c++20 -O3 -fsanitize=thread -pthread select_tests.cpp -o select_tests.out \
+		-I$(BOOST_DIR)/include -L$(BOOST_DIR)/lib
+	./select_tests.out
+
+test_all:
+		make test
+		make test_stress
+		make test_select

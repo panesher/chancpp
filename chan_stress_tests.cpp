@@ -17,7 +17,7 @@ BOOST_AUTO_TEST_CASE(stress_mpmc_random_bursts) {
   constexpr int writers = 8;
   constexpr int readers = 8;
   constexpr int per_writer = 2000; // total 16k ops
-  chan::Chan<int> c(64);
+  chan::BufferChannel<int> c(64);
 
   std::atomic<int> produced{0};
   std::atomic<int> consumed{0};
@@ -63,10 +63,16 @@ BOOST_AUTO_TEST_CASE(stress_mpmc_random_bursts) {
     });
   }
 
-  for (auto &t : ws) { if (t.joinable()) t.join(); }
+  for (auto &t : ws) {
+    if (t.joinable())
+      t.join();
+  }
   // All writers done, now close to release readers once drained
   c.close();
-  for (auto &t : rs) { if (t.joinable()) t.join(); }
+  for (auto &t : rs) {
+    if (t.joinable())
+      t.join();
+  }
 
   BOOST_TEST(produced.load() == writers * per_writer);
   BOOST_TEST(consumed.load() == produced.load());
@@ -78,7 +84,7 @@ BOOST_AUTO_TEST_CASE(stress_mpmc_random_bursts) {
 
 // 2) Closing while writers are blocked on full buffer must throw inside senders
 BOOST_AUTO_TEST_CASE(stress_close_while_blocked_writers) {
-  chan::Chan<int> c(2);
+  chan::BufferChannel<int> c(2);
 
   // Fill and block several senders
   c.send(1);
@@ -99,7 +105,10 @@ BOOST_AUTO_TEST_CASE(stress_close_while_blocked_writers) {
   // Give time for threads to block
   std::this_thread::sleep_for(30ms);
   c.close();
-  for (auto &t : ws) { if (t.joinable()) t.join(); }
+  for (auto &t : ws) {
+    if (t.joinable())
+      t.join();
+  }
 
   // Drain the two existing values
   auto a = c.receive();
@@ -113,9 +122,9 @@ BOOST_AUTO_TEST_CASE(stress_close_while_blocked_writers) {
   BOOST_TEST(threw.load() == 6);
 }
 
-// 3) EmptyChan ping-pong for many iterations
+// 3) NoBufferChannel ping-pong for many iterations
 BOOST_AUTO_TEST_CASE(stress_emptychan_ping_pong) {
-  chan::EmptyChan<int> ec;
+  chan::NoBufferChannel<int> ec;
   constexpr int iters = 20000;
 
   std::atomic<int> got{0};
@@ -139,15 +148,17 @@ BOOST_AUTO_TEST_CASE(stress_emptychan_ping_pong) {
     }
   });
 
-  if (pinger.joinable()) pinger.join();
-  if (ponger.joinable()) ponger.join();
+  if (pinger.joinable())
+    pinger.join();
+  if (ponger.joinable())
+    ponger.join();
 
   BOOST_TEST(got.load() == iters);
 }
 
 // 4) Try-receive heavy polling under contention
 BOOST_AUTO_TEST_CASE(stress_try_receive_with_polling) {
-  chan::Chan<int> c(8);
+  chan::BufferChannel<int> c(8);
   constexpr int total = 10000;
 
   std::thread writer([&] {
@@ -169,8 +180,10 @@ BOOST_AUTO_TEST_CASE(stress_try_receive_with_polling) {
     }
   });
 
-  if (writer.joinable()) writer.join();
-  if (poller.joinable()) poller.join();
+  if (writer.joinable())
+    writer.join();
+  if (poller.joinable())
+    poller.join();
 
   // Final verification
   int expected = (total - 1) * total / 2; // sum 0..N-1
@@ -181,7 +194,7 @@ BOOST_AUTO_TEST_CASE(stress_try_receive_with_polling) {
 BOOST_AUTO_TEST_CASE(stress_many_small_channels_lifecycle) {
   constexpr int rounds = 2000;
   for (int r = 0; r < rounds; ++r) {
-    chan::Chan<int> c(1);
+    chan::BufferChannel<int> c(1);
     c.send(r);
     auto v = c.receive();
     BOOST_REQUIRE(v.has_value());
