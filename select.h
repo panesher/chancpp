@@ -9,7 +9,7 @@ namespace chan {
 
 // A "case" binds a channel reference to a handler F(T)
 template <class Ch, class F> struct Case {
-  Ch &ch; // pointer so Case is copyable and stable in a tuple
+  Ch &ch; // link so Case is copyable and stable in a tuple
   F handler;
 };
 
