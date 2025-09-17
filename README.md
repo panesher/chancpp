@@ -16,18 +16,20 @@ Go-style channels and a `select` primitive for modern C++20 projects.
 
 By default the provided `Makefile` expects Boost to be installed at `/opt/homebrew/opt/boost`. Adjust `BOOST_DIR` if it lives elsewhere on your system.
 
-## Building & Testing
-
-```bash
-make test          # unit tests for buffered/unbuffered channels
-make test_stress    # stress scenarios with high contention
-make test_select    # coverage for the Select combinator
-make test_all       # run the full suite
-```
-
-Each target builds the corresponding test binary under `build/` with ThreadSanitizer enabled, then runs it.
-
 ## Basic Usage
+
+Here’s a minimal example showing how to create a channel, send a value, and receive it in Go style:
+```cpp
+chan::Chan<int> c(3);
+
+std::thread producer([&] {
+  c << 2;
+  c.close();
+});
+
+std::optional<int> value;
+value << c;
+```
 
 Create a channel with a fixed capacity. Producers block when the buffer is full and consumers block when it is empty. Closing the channel causes subsequent receives to return `std::nullopt`.
 
@@ -96,6 +98,17 @@ Select(
 ```
 
 `Select` tries each case synchronously first, then waits on an internal notification channel until one of the subscribed channels becomes ready.
+
+## Testing
+
+```bash
+make test          # unit tests for buffered/unbuffered channels
+make test_stress    # stress scenarios with high contention
+make test_select    # coverage for the Select combinator
+make test_all       # run the full suite
+```
+
+Each target builds the corresponding test binary under `build/` with ThreadSanitizer enabled, then runs it.
 
 ## Customization Notes
 - `chan::BufferChannel` accepts custom mutex, condition variable, and queue types if you need specialised primitives.
